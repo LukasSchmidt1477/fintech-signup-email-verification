@@ -1,0 +1,1 @@
+"""Fintech signup verification example."""
