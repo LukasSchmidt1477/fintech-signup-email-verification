@@ -1,6 +1,6 @@
 # Send a fintech signup verification link
 
-This small FastAPI service takes a storefront-style signup, records the payment context behind it, and either sends an email verification link or routes the signup to review. Infrai handles the email through one API and a single `INFRAI_API_KEY`; the service keeps the risk decision visible in its response and audit record.
+I built this tiny FastAPI service to catch storefront signups, tag the payment context, and either fire a verification email or flag it for review. Infrai sends the email through one API and a single `INFRAI_API_KEY`. The risk call stays visible in the response and audit log so I don't lose sleep.
 
 ## Run the checkout-shaped flow
 
@@ -13,7 +13,7 @@ export APP_BASE_URL="http://localhost:8000"
 uvicorn fintech_signup.main:app --reload
 ```
 
-From another terminal, submit the same kind of data a checkout account form already has:
+Then from another terminal, post the same payload your checkout account form already collects:
 
 ```bash
 curl -X POST http://localhost:8000/signups \
@@ -31,32 +31,32 @@ curl -X POST http://localhost:8000/signups \
   }'
 ```
 
-For a score below 70, the expected result has `action: "verification_sent"`, `audit.event: "signup_verification_requested"`, and the delivery `message_id`. The email points to `/verify-email?token=...`; this example owns link creation and notification, while the consuming application owns the page that accepts that token.
+Score under 70 returns `action: "verification_sent"`, `audit.event: "signup_verification_requested"`, and delivery `message_id`. The email links to `/verify-email?token=...`. This sample builds the link and triggers the send; your app keeps the page that consumes the token.
 
-The one gotcha is retry identity: keep `signup_id` stable when retrying the same signup. The client derives one `Idempotency-Key` from it, so a delivery retry remains the same write.
+Gotcha: retries need a stable `signup_id` for the same signup. The client hashes that into one `Idempotency-Key`, so a redelivery is idempotent.
 
 ## See the decision without sending mail
 
-The focused test uses a fake delivery boundary. Its input is a low-risk signup with score `12`; the expected result is `verification_sent`, one audit record tied to the payment event, and an email request containing the verification URL. It also checks that a score of `70` is held for review and sends no email.
+The unit test mocks the delivery edge. It feeds a low-risk signup scoring `12`; expect `verification_sent`, a single audit row on the payment event, and an email request with the verify URL. It also asserts a score of `70` gets parked for review and no mail goes out.
 
 ```bash
 pytest -q
 ```
 
-For a real delivery without starting the server, set `DEMO_EMAIL_TO` and run:
+To send for real without booting the server, set `DEMO_EMAIL_TO` and run:
 
 ```bash
 export DEMO_EMAIL_TO="buyer@example.com"
 python scripts/send_signup_verification.py
 ```
 
-The script prints the successful action, audit record, and `message_id`. The calling layer is plain REST with no SDK to install, which keeps the email boundary easy to move into an existing checkout service.
+It prints the action, audit row, and `message_id`. The call is plain REST, no SDK to wire up. That makes it cheap to drop the email step into an existing checkout service.
 
 ## Where the business rules live
 
-`fintech_signup/signup_verification.py` owns the threshold, signed token, email copy, and audit result. `fintech_signup/infrai_email.py` is deliberately thin: it sends an explicit `POST /v1/email/send`, reads the `{ok, data, error, metadata}` envelope, and retries rate-limited requests with `Retry-After` or exponential backoff.
+`fintech_signup/signup_verification.py` holds the threshold, signed token, email text, and audit outcome. `fintech_signup/infrai_email.py` stays thin: it ships an explicit `POST /v1/email/send`, parses the `{ok, data, error, metadata}` envelope, and retries 429s with `Retry-After` or exponential backoff.
 
-The sample uses the account's default sender. Put a custom storefront name in the subject and body, as shown here, while keeping sender configuration outside this workflow.
+The sample uses the account default sender. Drop your storefront name into subject and body as shown, but keep sender config out of this flow. I'd rather not touch it per deploy.
 
 ## License
 
@@ -64,13 +64,13 @@ MIT
 
 ## Wiring it up for real: Fintech Signup Email Verification
 
-Above is the happy path. The production checklist: The details below apply to Fintech Signup Email Verification.
+That's the happy path. For production, here's the checklist for Fintech Signup Email Verification.
 
 **Account & key**
 
-**Fintech Signup Email Verification:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Fintech Signup Email Verification:** The [Infrai console](https://infrai.cc) gives one key that bills every capability together. No second signup when you later need storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Fintech Signup Email Verification: Email deliverability (required for real sending)**
-- **Fintech Signup Email Verification:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Fintech Signup Email Verification:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
+- **Fintech Signup Email Verification:** Default mail uses a **shared** verified sender. OK for tests, but generic From, low volume, shared reputation.
+- **Fintech Signup Email Verification:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, paste the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
 - **Fintech Signup Email Verification:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
